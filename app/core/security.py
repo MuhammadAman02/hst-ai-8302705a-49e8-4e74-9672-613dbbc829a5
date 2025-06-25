@@ -1,175 +1,147 @@
-import os
-import time
-from datetime import datetime, timedelta
-from typing import Dict, Optional, Union, Any
+"""Security and authentication for the fraud detection system"""
 
-from jose import jwt
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel
+import logging
 
 from app.core.config import settings
-from app.core.logging import app_logger
 
-# Password hashing context
+logger = logging.getLogger(__name__)
+
+# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# OAuth2 password bearer for token authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
+
+class TokenData(BaseModel):
+    """Token data model"""
+    username: Optional[str] = None
+    roles: list = []
+    exp: Optional[datetime] = None
+
+
+class User(BaseModel):
+    """User model for authentication"""
+    username: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    roles: list = []
+    is_active: bool = True
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a hash.
-    
-    Args:
-        plain_password: The plain-text password
-        hashed_password: The hashed password to compare against
-        
-    Returns:
-        True if the password matches the hash, False otherwise
-    """
+    """Verify a password against its hash"""
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password: str) -> str:
-    """Generate a password hash.
-    
-    Args:
-        password: The plain-text password to hash
-        
-    Returns:
-        The hashed password
-    """
+    """Hash a password"""
     return pwd_context.hash(password)
 
-def create_access_token(
-    data: Dict[str, Any], 
-    expires_delta: Optional[timedelta] = None
-) -> str:
-    """Create a JWT access token.
-    
-    Args:
-        data: The data to encode in the token
-        expires_delta: Optional expiration time delta
-        
-    Returns:
-        The encoded JWT token
-    """
+
+def create_access_token(data: Dict[Any, Any], expires_delta: Optional[timedelta] = None) -> str:
+    """Create a JWT access token"""
     to_encode = data.copy()
     
-    # Set expiration time
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({"exp": expire})
     
-    # Create the JWT token
     try:
-        encoded_jwt = jwt.encode(
-            to_encode, 
-            settings.secret_key, 
-            algorithm=settings.algorithm
-        )
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
         return encoded_jwt
     except Exception as e:
-        app_logger.error(f"Error creating access token: {e}")
+        logger.error(f"Error creating access token: {e}")
         raise
 
-def decode_access_token(token: str) -> Dict[str, Any]:
-    """Decode a JWT access token.
-    
-    Args:
-        token: The JWT token to decode
-        
-    Returns:
-        The decoded token payload
-        
-    Raises:
-        HTTPException: If the token is invalid
-    """
-    try:
-        payload = jwt.decode(
-            token, 
-            settings.secret_key, 
-            algorithms=[settings.algorithm]
-        )
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except jwt.JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
 
-async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
-    """Get the current user from a JWT token.
-    
-    This is a dependency that can be used in FastAPI route functions.
-    
-    Args:
-        token: The JWT token from the Authorization header
-        
-    Returns:
-        The user data from the token, or None if no token is provided
-        
-    Raises:
-        HTTPException: If the token is invalid
-    """
-    if not token:
-        return None
-    
+def verify_token(token: str) -> Optional[TokenData]:
+    """Verify and decode a JWT token"""
     try:
-        payload = decode_access_token(token)
-        return payload
-    except HTTPException:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        roles: list = payload.get("roles", [])
+        exp: datetime = datetime.fromtimestamp(payload.get("exp", 0))
+        
+        if username is None:
+            return None
+        
+        return TokenData(username=username, roles=roles, exp=exp)
+    
+    except JWTError as e:
+        logger.warning(f"JWT verification failed: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Error verifying token: {e}")
         return None
 
-async def get_current_active_user(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """Get the current active user.
-    
-    This is a dependency that can be used in FastAPI route functions.
-    It requires that a user is authenticated.
-    
-    Args:
-        current_user: The current user from get_current_user
-        
-    Returns:
-        The current user data
-        
-    Raises:
-        HTTPException: If no user is authenticated or the user is inactive
-    """
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Check if the user is active (if you have an 'active' field in your user model)
-    if current_user.get("disabled", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user"
-        )
-    
-    return current_user
 
-def generate_secure_random_string(length: int = 32) -> str:
-    """Generate a secure random string.
+def get_current_active_user(token: str) -> Optional[User]:
+    """Get current active user from token"""
+    token_data = verify_token(token)
     
-    Args:
-        length: The length of the string to generate
-        
-    Returns:
-        A secure random string
-    """
-    return os.urandom(length).hex()[:length]
+    if token_data is None:
+        return None
+    
+    # In a real application, you would fetch user data from database
+    # For demo purposes, we'll return a mock user
+    if token_data.username == "analyst":
+        return User(
+            username="analyst",
+            email="analyst@irishbank.ie",
+            full_name="Fraud Analyst",
+            roles=["analyst", "investigator"],
+            is_active=True
+        )
+    
+    return None
+
+
+def check_permission(user: User, required_role: str) -> bool:
+    """Check if user has required role/permission"""
+    return required_role in user.roles or "admin" in user.roles
+
+
+# Demo users for development (replace with database in production)
+DEMO_USERS = {
+    "analyst": {
+        "username": "analyst",
+        "email": "analyst@irishbank.ie",
+        "full_name": "Fraud Analyst",
+        "hashed_password": get_password_hash("secure123"),
+        "roles": ["analyst", "investigator"],
+        "is_active": True
+    },
+    "admin": {
+        "username": "admin",
+        "email": "admin@irishbank.ie",
+        "full_name": "System Administrator",
+        "hashed_password": get_password_hash("admin123"),
+        "roles": ["admin", "analyst", "investigator"],
+        "is_active": True
+    }
+}
+
+
+def authenticate_user(username: str, password: str) -> Optional[User]:
+    """Authenticate a user with username and password"""
+    user_data = DEMO_USERS.get(username)
+    
+    if not user_data:
+        return None
+    
+    if not verify_password(password, user_data["hashed_password"]):
+        return None
+    
+    return User(
+        username=user_data["username"],
+        email=user_data["email"],
+        full_name=user_data["full_name"],
+        roles=user_data["roles"],
+        is_active=user_data["is_active"]
+    )
