@@ -1,83 +1,59 @@
-from typing import Any, Dict, List, Optional, Union
+"""Configuration management for the fraud detection system"""
+
 import os
-from pydantic import AnyHttpUrl, field_validator, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
+from pydantic import BaseSettings, validator
+
 
 class Settings(BaseSettings):
-    """Application settings.
+    """Application settings with validation"""
     
-    This class uses Pydantic's BaseSettings which automatically reads from environment variables.
-    Environment variables take precedence over values defined in the class.
+    # Application
+    APP_NAME: str = "Irish Banking Fraud Detection System"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool = False
     
-    Example:
-        If you define PORT=9000 in your environment, it will override the default value of 8000.
-    """
-    # CORE SETTINGS
-    app_name: str = "FastAPI Application"
-    app_description: str = "A modern web application built with FastAPI"
-    app_version: str = "0.1.0"
-    debug: bool = False
+    # Server
+    HOST: str = "0.0.0.0"
+    PORT: int = 8080
     
-    # API SETTINGS
-    api_prefix: str = "/api"
+    # Security
+    SECRET_KEY: str = "your-super-secret-key-change-in-production"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ALGORITHM: str = "HS256"
     
-    # SERVER SETTINGS
-    host: str = "0.0.0.0"  # 0.0.0.0 for Docker/production compatibility
-    port: int = 8000
+    # Database
+    DATABASE_URL: str = "sqlite:///./fraud_detection.db"
     
-    # CORS SETTINGS
-    # List of origins that are allowed to make cross-origin requests
-    # Use ["*"] to allow any origin (not recommended for production)
-    cors_origins: List[str] = []
+    # ML Models
+    MODEL_PATH: str = "./models"
+    FRAUD_THRESHOLD: float = 0.7
     
-    # SECURITY SETTINGS
-    # Secret key for signing tokens - MUST be overridden in production
-    secret_key: str = "CHANGEME_IN_PRODUCTION"
-    # Algorithm used for token signing
-    algorithm: str = "HS256"
-    # Token expiration time in minutes
-    access_token_expire_minutes: int = 30
+    # External APIs
+    CENTRAL_BANK_API_URL: Optional[str] = None
+    CENTRAL_BANK_API_KEY: Optional[str] = None
     
-    # DATABASE SETTINGS
-    # Database connection string - override in production
-    database_url: Optional[str] = None
+    # Notification
+    EMAIL_ENABLED: bool = False
+    SMTP_SERVER: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
     
-    # STATIC FILES
-    static_dir: str = "app/static"
+    # Compliance
+    GDPR_RETENTION_DAYS: int = 2555  # 7 years as per Irish banking regulations
+    AUDIT_LOG_ENABLED: bool = True
     
-    # TEMPLATES
-    templates_dir: str = "app/templates"
+    @validator('SECRET_KEY')
+    def validate_secret_key(cls, v):
+        if len(v) < 32:
+            raise ValueError('SECRET_KEY must be at least 32 characters long')
+        return v
     
-    # Configure Pydantic to use environment variables
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-    )
-    
-    # Validators
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
-        """Parse CORS origins from string to list.
-        
-        This allows setting CORS_ORIGINS as a comma-separated string in .env file.
-        """
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
 
-# Create a global settings instance
+
+# Global settings instance
 settings = Settings()
-
-# Helper function to get settings as a dictionary
-def get_settings_dict() -> Dict[str, Any]:
-    """Return settings as a dictionary for easy access."""
-    return settings.model_dump()
-
-# Helper function to get a specific setting
-def get_setting(key: str, default: Any = None) -> Any:
-    """Get a specific setting by key with an optional default value."""
-    return getattr(settings, key, default)
