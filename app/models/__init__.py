@@ -1,2 +1,7 @@
-# This file makes this directory a Python package.
-# It's intended for data models & schemas (e.g., Pydantic, SQLAlchemy).
+"""Models package for the fraud detection system"""
+
+from app.models.transaction import Transaction
+from app.models.customer import Customer
+from app.models.alert import FraudAlert
+
+__all__ = ["Transaction", "Customer", "FraudAlert"]
